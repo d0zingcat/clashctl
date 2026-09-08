@@ -230,9 +230,9 @@ impl<'a> From<Proxies> for ProxyTree<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
 
-    use clashctl_core::model::{Proxy, ProxyType};
+    use clashctl_core::model::{ProviderProxy, Proxy, ProxyProvider, ProxyProviders, ProxyType};
     use crossterm::event::KeyCode;
 
     use super::*;
@@ -324,6 +324,55 @@ mod tests {
         assert!(matches!(
             action,
             Some(Action::ApplySelection { group, proxy }) if group == "Group" && proxy == "two"
+        ));
+    }
+
+    #[test]
+    fn provider_resolved_group_keeps_current_member_and_can_switch() {
+        let top_level = proxies(vec![(
+            "Group",
+            proxy(
+                ProxyType::Selector,
+                Some(vec!["provider-one", "provider-two"]),
+                Some("provider-one"),
+            ),
+        )]);
+        let providers = ProxyProviders {
+            providers: BTreeMap::from([(
+                "subscription".to_owned(),
+                ProxyProvider {
+                    proxies: vec![
+                        ProviderProxy {
+                            name: "provider-one".to_owned(),
+                            proxy: proxy(ProxyType::Shadowsocks, None, None),
+                        },
+                        ProviderProxy {
+                            name: "provider-two".to_owned(),
+                            proxy: proxy(ProxyType::Trojan, None, None),
+                        },
+                    ],
+                },
+            )]),
+        };
+        let mut tree = ProxyTree::from(top_level.merge_proxy_providers(providers));
+
+        assert_eq!(tree.groups.len(), 1);
+        assert_eq!(tree.groups[0].current, Some(0));
+        assert_eq!(tree.groups[0].members.len(), 2);
+
+        tree.hold();
+        tree.handle(ListEvent {
+            fast: false,
+            code: KeyCode::Down,
+        });
+        let action = tree.handle(ListEvent {
+            fast: false,
+            code: KeyCode::Enter,
+        });
+
+        assert!(matches!(
+            action,
+            Some(Action::ApplySelection { group, proxy }) if group == "Group" && proxy == "provider-two"
         ));
     }
 }

@@ -66,6 +66,32 @@ impl<'a> ProxyTree<'a> {
         self.testing
     }
 
+    /// Return the proxies targeted by a manual latency test.
+    ///
+    /// When a group is expanded, test only the highlighted node. Otherwise,
+    /// test every regular proxy in the focused group.
+    pub fn manual_latency_test_targets(&self) -> Vec<String> {
+        let Some(group) = self.groups.get(self.cursor) else {
+            return vec![];
+        };
+
+        if self.expanded {
+            return group
+                .members
+                .get(group.cursor)
+                .filter(|proxy| proxy.proxy_type.is_normal())
+                .map(|proxy| vec![proxy.name.clone()])
+                .unwrap_or_default();
+        }
+
+        group
+            .members
+            .iter()
+            .filter(|proxy| proxy.proxy_type.is_normal())
+            .map(|proxy| proxy.name.clone())
+            .collect()
+    }
+
     #[inline]
     pub fn start_testing(&mut self) -> &mut Self {
         self.testing = true;
@@ -111,7 +137,7 @@ impl<'a> ProxyTree<'a> {
                 if self.testing {
                     FooterItem::span(Span::styled(" Testing ", highlight.fg(Color::Green)))
                 } else {
-                    FooterItem::spans(help_footer("Test", style, highlight)).wrapped()
+                    FooterItem::spans(help_footer("Test group", style, highlight)).wrapped()
                 },
                 FooterItem::spans(sort),
             ];
@@ -142,7 +168,7 @@ impl<'a> ProxyTree<'a> {
             footer.push_left(if self.testing {
                 FooterItem::span(Span::styled(" Testing ", highlight.fg(Color::Blue)))
             } else {
-                FooterItem::spans(help_footer("Test", style, highlight)).wrapped()
+                FooterItem::spans(help_footer("Test node", style, highlight)).wrapped()
             });
 
             footer.push_left(tagged_footer("Sort", style, self.sort_method).into());
@@ -325,6 +351,41 @@ mod tests {
             action,
             Some(Action::ApplySelection { group, proxy }) if group == "Group" && proxy == "two"
         ));
+    }
+
+    #[test]
+    fn manual_latency_test_targets_follow_the_current_focus() {
+        let mut tree = ProxyTree::from(proxies(vec![
+            (
+                "Group",
+                proxy(
+                    ProxyType::Selector,
+                    Some(vec!["one", "builtin", "two"]),
+                    Some("one"),
+                ),
+            ),
+            ("one", proxy(ProxyType::Shadowsocks, None, None)),
+            ("builtin", proxy(ProxyType::Direct, None, None)),
+            ("two", proxy(ProxyType::Trojan, None, None)),
+        ]));
+
+        assert_eq!(
+            tree.manual_latency_test_targets(),
+            vec!["one".to_owned(), "two".to_owned()]
+        );
+
+        tree.hold();
+        tree.handle(ListEvent {
+            fast: false,
+            code: KeyCode::Down,
+        });
+        assert!(tree.manual_latency_test_targets().is_empty());
+
+        tree.handle(ListEvent {
+            fast: false,
+            code: KeyCode::Down,
+        });
+        assert_eq!(tree.manual_latency_test_targets(), vec!["two".to_owned()]);
     }
 
     #[test]

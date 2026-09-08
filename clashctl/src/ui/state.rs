@@ -4,12 +4,12 @@ use clashctl_core::model::{ConnectionWithSpeed, Log, Rule, Traffic, Version};
 use smart_default::SmartDefault;
 
 use crate::{
+    Action, ConfigState, Event, InputEvent, UpdateEvent,
     interactive::{Noop, RuleSort},
     ui::{
-        components::{MovableListManage, MovableListManager, MovableListState, ProxyTree},
         TuiResult,
+        components::{MovableListManage, MovableListManager, MovableListState, ProxyTree},
     },
-    Action, ConfigState, Event, InputEvent, UpdateEvent,
 };
 
 pub(crate) type LogListState<'a> = MovableListState<'a, Log, Noop>;
@@ -159,15 +159,11 @@ impl<'a> TuiStates<'a> {
             }
             InputEvent::TestLatency => {
                 if self.title() == "Proxies" && !self.proxy_tree.is_testing() {
-                    self.proxy_tree.start_testing();
-                    let group = self.proxy_tree.current_group();
-                    let proxies = group
-                        .members()
-                        .iter()
-                        .filter(|x| x.proxy_type().is_normal())
-                        .map(|x| x.name().into())
-                        .collect();
-                    return Ok(Some(Action::TestLatency { proxies }));
+                    let proxies = self.proxy_tree.manual_latency_test_targets();
+                    if !proxies.is_empty() {
+                        self.proxy_tree.start_testing();
+                        return Ok(Some(Action::TestLatency { proxies }));
+                    }
                 }
             }
             InputEvent::NextSort => {

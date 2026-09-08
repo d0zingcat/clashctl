@@ -9,8 +9,8 @@ use tui::{
 };
 
 use crate::{
-    ui::{components::MovableListItem, utils::AsColor, TuiError, TuiResult},
     Action,
+    ui::{TuiError, TuiResult, components::MovableListItem, utils::AsColor},
 };
 
 #[derive(Debug, Clone)]
@@ -130,7 +130,7 @@ impl TryFrom<KC> for Event {
     fn try_from(value: KC) -> TuiResult<Self> {
         match value {
             KC::Char('q') | KC::Char('x') => Ok(Event::Quit),
-            KC::Char('t') => Ok(Event::Input(InputEvent::TestLatency)),
+            KC::Char('t') | KC::Char('T') => Ok(Event::Input(InputEvent::TestLatency)),
             KC::Esc => Ok(Event::Input(InputEvent::Esc)),
             KC::Char(' ') => Ok(Event::Input(InputEvent::ToggleHold)),
             KC::Char(char) if char.is_ascii_digit() => Ok(Event::Input(InputEvent::TabGoto(
@@ -160,6 +160,21 @@ impl From<KE> for Event {
                 .try_into()
                 .unwrap_or(Self::Input(InputEvent::Other(value))),
             _ => Self::Input(InputEvent::Other(value)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn both_cases_of_test_shortcut_trigger_latency_testing() {
+        for key in ['t', 'T'] {
+            assert!(matches!(
+                Event::try_from(KC::Char(key)).unwrap(),
+                Event::Input(InputEvent::TestLatency)
+            ));
         }
     }
 }

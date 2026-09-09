@@ -128,30 +128,42 @@ fn action_job(
         tx.send(Event::Action(action.clone()))?;
         match action {
             Action::TestLatency { proxies } => {
-                let result = proxies
+                let results = proxies
                     .par_iter()
-                    .filter_map(|proxy| {
+                    .map(|proxy| {
                         clash
                             .get_proxy_delay(proxy, flags.test_url.as_str(), flags.timeout)
-                            .err()
+                            .map(|delay| delay.delay)
                     })
                     .collect::<Vec<_>>();
 
-                let count = result.len();
+                let delays = results
+                    .iter()
+                    .filter_map(|result| result.as_ref().ok())
+                    .copied()
+                    .collect::<Vec<_>>();
+                let failed = results.len() - delays.len();
 
-                if count != 0 {
+                if failed != 0 {
                     warn!(
                         "   {}",
-                        result
+                        results
                             .into_iter()
-                            .map(|x| x.to_string())
+                            .filter_map(|result| result.err())
+                            .map(|error| error.to_string())
                             .collect::<Vec<_>>()
                             .join(" ")
                     );
-                    warn!("({}) error(s) during test proxy delay", count);
+                    warn!("({}) error(s) during test proxy delay", failed);
                 }
 
-                tx.send(Event::Update(UpdateEvent::ProxyTestLatencyDone))?;
+                let average_delay =
+                    (!delays.is_empty()).then(|| delays.iter().sum::<u64>() / delays.len() as u64);
+                tx.send(Event::Update(UpdateEvent::ProxyTestLatencyDone {
+                    succeeded: delays.len(),
+                    failed,
+                    average_delay,
+                }))?;
                 tx.send(Event::Update(UpdateEvent::Proxies(
                     clash.get_proxies_with_providers()?,
                 )))?;

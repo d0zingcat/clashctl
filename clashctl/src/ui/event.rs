@@ -100,7 +100,11 @@ pub enum UpdateEvent {
     Proxies(Proxies),
     Rules(Rules),
     Log(Log),
-    ProxyTestLatencyDone,
+    ProxyTestLatencyDone {
+        succeeded: usize,
+        failed: usize,
+        average_delay: Option<u64>,
+    },
 }
 
 impl Display for UpdateEvent {
@@ -113,7 +117,19 @@ impl Display for UpdateEvent {
             UpdateEvent::Proxies(x) => write!(f, "{:?}", x),
             UpdateEvent::Rules(x) => write!(f, "{:?}", x),
             UpdateEvent::Log(x) => write!(f, "{:?}", x),
-            UpdateEvent::ProxyTestLatencyDone => write!(f, "Test latency done"),
+            UpdateEvent::ProxyTestLatencyDone {
+                succeeded,
+                failed,
+                average_delay,
+            } => write!(
+                f,
+                "Latency test: {} succeeded, {} failed{}",
+                succeeded,
+                failed,
+                average_delay
+                    .map(|delay| format!(", average {} ms", delay))
+                    .unwrap_or_default()
+            ),
         }
     }
 }

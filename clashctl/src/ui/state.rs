@@ -119,8 +119,13 @@ impl<'a> TuiStates<'a> {
                 self.rule_freq = rules.owned_frequency();
                 self.rule_state.sorted_merge(rules.rules);
             }
-            UpdateEvent::ProxyTestLatencyDone => {
-                self.proxy_tree.end_testing();
+            UpdateEvent::ProxyTestLatencyDone {
+                succeeded,
+                failed,
+                average_delay,
+            } => {
+                self.proxy_tree
+                    .end_testing(succeeded, failed, average_delay);
             }
         }
         Ok(None)

@@ -110,6 +110,8 @@ pub enum ProxyType {
     Snell,
     Trojan,
     Socks5,
+    Vless,
+    Hysteria2,
     // Relay
     Relay,
     // Unknown
@@ -147,6 +149,8 @@ impl ProxyType {
                 | ProxyType::Snell
                 | ProxyType::Trojan
                 | ProxyType::Socks5
+                | ProxyType::Vless
+                | ProxyType::Hysteria2
         )
     }
 }
@@ -307,5 +311,13 @@ mod provider_tests {
                 .merge_proxy_providers(ProxyProviders::default()),
             top_level
         );
+    }
+
+    #[test]
+    fn mihomo_vless_and_hysteria2_nodes_are_testable_proxies() {
+        for raw_type in [r#""Vless""#, r#""Hysteria2""#] {
+            let proxy_type: ProxyType = from_str(raw_type).unwrap();
+            assert!(proxy_type.is_normal());
+        }
     }
 }

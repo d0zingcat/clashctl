@@ -10,7 +10,7 @@ use tui::{
 use crate::{
     components::{Footer, FooterItem, MovableListManage, ProxyGroup, ProxyItem},
     interactive::{EndlessSelf, ProxySort, Sortable},
-    ui::{help_footer, tagged_footer, Action, Coord, ListEvent, Wrap},
+    ui::{Action, Coord, ListEvent, Wrap, help_footer, tagged_footer},
 };
 
 // TODO Proxy tree furthur functions
@@ -156,7 +156,8 @@ impl<'a> ProxyTree<'a> {
     }
 
     pub fn replace_with(&mut self, mut new_tree: ProxyTree<'a>) -> &mut Self {
-        // let map = HashMap::<_, _, RandomState>::from_iter(self.groups.iter().map(|x|
+        // let map = HashMap::<_, _,
+        // RandomState>::from_iter(self.groups.iter().map(|x|
         // (&x.name, x)));
         let old_groups = &self.groups;
         let current_group = self.groups.get(self.cursor);
@@ -198,23 +199,19 @@ impl<'a> From<Proxies> for ProxyTree<'a> {
                 .expect("ProxyGroup should have member vec");
             let mut members = Vec::with_capacity(all.len());
             for x in all.iter() {
-                let member = (
-                    x.as_str(),
-                    val.get(x)
-                        .to_owned()
-                        .expect("Group member should be in all proxies"),
-                )
-                    .into();
-                members.push(member);
+                if let Some(proxy) = val.get(x) {
+                    members.push((x.as_str(), proxy).into());
+                }
             }
 
-            // if group.now.is_some then it must be in all proxies
-            // So use map & expect instead of Option#and_then
-            let current = group.now.as_ref().map(|name| {
+            if members.is_empty() {
+                continue;
+            }
+
+            let current = group.now.as_ref().and_then(|name| {
                 members
                     .iter()
                     .position(|item: &ProxyItem| &item.name == name)
-                    .expect("Group member should be in all proxies")
             });
 
             ret.groups.push(ProxyGroup {
@@ -228,6 +225,155 @@ impl<'a> From<Proxies> for ProxyTree<'a> {
         }
 
         ret
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, HashMap};
+
+    use clashctl_core::model::{ProviderProxy, Proxy, ProxyProvider, ProxyProviders, ProxyType};
+    use crossterm::event::KeyCode;
+
+    use super::*;
+
+    fn proxy(proxy_type: ProxyType, all: Option<Vec<&str>>, now: Option<&str>) -> Proxy {
+        Proxy {
+            proxy_type,
+            history: vec![],
+            udp: None,
+            all: all.map(|members| members.into_iter().map(str::to_owned).collect()),
+            now: now.map(str::to_owned),
+        }
+    }
+
+    fn proxies(entries: Vec<(&str, Proxy)>) -> Proxies {
+        Proxies {
+            proxies: entries
+                .into_iter()
+                .map(|(name, proxy)| (name.to_owned(), proxy))
+                .collect::<HashMap<_, _>>(),
+        }
+    }
+
+    #[test]
+    fn skips_members_missing_from_proxy_map() {
+        let tree = ProxyTree::from(proxies(vec![
+            (
+                "Group",
+                proxy(
+                    ProxyType::Selector,
+                    Some(vec!["valid", "missing"]),
+                    Some("valid"),
+                ),
+            ),
+            ("valid", proxy(ProxyType::Shadowsocks, None, None)),
+        ]));
+
+        assert_eq!(tree.groups.len(), 1);
+        assert_eq!(tree.groups[0].members.len(), 1);
+        assert_eq!(tree.groups[0].members[0].name, "valid");
+        assert_eq!(tree.groups[0].current, Some(0));
+    }
+
+    #[test]
+    fn clears_current_when_current_member_is_missing() {
+        let tree = ProxyTree::from(proxies(vec![
+            (
+                "Group",
+                proxy(ProxyType::Selector, Some(vec!["valid"]), Some("missing")),
+            ),
+            ("valid", proxy(ProxyType::Shadowsocks, None, None)),
+        ]));
+
+        assert_eq!(tree.groups[0].current, None);
+        assert_eq!(tree.groups[0].cursor, 0);
+    }
+
+    #[test]
+    fn skips_groups_with_no_available_members() {
+        let tree = ProxyTree::from(proxies(vec![(
+            "Empty",
+            proxy(ProxyType::Selector, Some(vec!["missing"]), Some("missing")),
+        )]));
+
+        assert!(tree.groups.is_empty());
+    }
+
+    #[test]
+    fn keeps_valid_groups_selectable() {
+        let mut tree = ProxyTree::from(proxies(vec![
+            (
+                "Group",
+                proxy(ProxyType::Selector, Some(vec!["one", "two"]), Some("one")),
+            ),
+            ("one", proxy(ProxyType::Shadowsocks, None, None)),
+            ("two", proxy(ProxyType::Trojan, None, None)),
+        ]));
+
+        tree.hold();
+        tree.handle(ListEvent {
+            fast: false,
+            code: KeyCode::Down,
+        });
+        let action = tree.handle(ListEvent {
+            fast: false,
+            code: KeyCode::Enter,
+        });
+
+        assert!(matches!(
+            action,
+            Some(Action::ApplySelection { group, proxy }) if group == "Group" && proxy == "two"
+        ));
+    }
+
+    #[test]
+    fn provider_resolved_group_keeps_current_member_and_can_switch() {
+        let top_level = proxies(vec![(
+            "Group",
+            proxy(
+                ProxyType::Selector,
+                Some(vec!["provider-one", "provider-two"]),
+                Some("provider-one"),
+            ),
+        )]);
+        let providers = ProxyProviders {
+            providers: BTreeMap::from([(
+                "subscription".to_owned(),
+                ProxyProvider {
+                    proxies: vec![
+                        ProviderProxy {
+                            name: "provider-one".to_owned(),
+                            proxy: proxy(ProxyType::Shadowsocks, None, None),
+                        },
+                        ProviderProxy {
+                            name: "provider-two".to_owned(),
+                            proxy: proxy(ProxyType::Trojan, None, None),
+                        },
+                    ],
+                },
+            )]),
+        };
+        let mut tree = ProxyTree::from(top_level.merge_proxy_providers(providers));
+
+        assert_eq!(tree.groups.len(), 1);
+        assert_eq!(tree.groups[0].current, Some(0));
+        assert_eq!(tree.groups[0].members.len(), 2);
+
+        tree.hold();
+        tree.handle(ListEvent {
+            fast: false,
+            code: KeyCode::Down,
+        });
+        let action = tree.handle(ListEvent {
+            fast: false,
+            code: KeyCode::Enter,
+        });
+
+        assert!(matches!(
+            action,
+            Some(Action::ApplySelection { group, proxy }) if group == "Group" && proxy == "provider-two"
+        ));
     }
 }
 

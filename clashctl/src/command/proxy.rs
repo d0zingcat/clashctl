@@ -4,11 +4,11 @@ use clap::{Parser, Subcommand};
 use clashctl_core::{model::ProxyType, strum::VariantNames};
 use log::{error, info, warn};
 use owo_colors::OwoColorize;
-use requestty::{prompt_one, Answer, ListItem, Question};
+use requestty::{Answer, ListItem, Question, prompt_one};
 
 use crate::{
-    interactive::{Flags, ProxySortBy, SortOrder},
     RenderList, Result,
+    interactive::{Flags, ProxySortBy, SortOrder},
 };
 // use crate::{Result};
 
@@ -101,11 +101,11 @@ impl ProxySubcommand {
 
         match self {
             ProxySubcommand::List(opt) => {
-                let proxies = clash.get_proxies()?;
+                let proxies = clash.get_proxies_with_providers()?;
                 proxies.render_list(opt);
             }
             ProxySubcommand::Use => {
-                let proxies = clash.get_proxies()?;
+                let proxies = clash.get_proxies_with_providers()?;
                 let mut groups = proxies
                     .iter()
                     .filter(|(_, p)| p.proxy_type.is_selector())
@@ -127,7 +127,8 @@ impl ProxySubcommand {
                 };
                 let proxy = clash.get_proxy(&group_selected)?;
 
-                // all / now only occurs when proxy_type is [`ProxyType::Selector`]
+                // all / now only occurs when proxy_type is
+                // [`ProxyType::Selector`]
                 let members = proxy.all.unwrap();
                 let now = proxy.now.unwrap();
                 let cur_index = members.iter().position(|x| x == &now).unwrap();

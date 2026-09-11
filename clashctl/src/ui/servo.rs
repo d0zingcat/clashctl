@@ -1,6 +1,6 @@
 use std::{
     sync::mpsc::{Receiver, Sender},
-    thread::{scope, JoinHandle},
+    thread::{JoinHandle, scope},
     time::Duration,
 };
 
@@ -12,9 +12,9 @@ use rayon::prelude::*;
 use crate::{
     interactive::Flags,
     ui::{
+        Action, TuiOpt, TuiResult,
         event::{Event, UpdateEvent},
         utils::{Interval, Pulse},
-        Action, TuiOpt, TuiResult,
     },
 };
 
@@ -84,7 +84,9 @@ fn req_job(_opt: &TuiOpt, _flags: &Flags, tx: Sender<Event>, clash: &Clash) -> T
             tx.send(Event::Update(UpdateEvent::Rules(clash.get_rules()?)))?;
         }
         if proxies_pulse.tick() {
-            tx.send(Event::Update(UpdateEvent::Proxies(clash.get_proxies()?)))?;
+            tx.send(Event::Update(UpdateEvent::Proxies(
+                clash.get_proxies_with_providers()?,
+            )))?;
         }
         if config_pulse.tick() {
             tx.send(Event::Update(UpdateEvent::Config(clash.get_configs()?)))?;
@@ -150,13 +152,17 @@ fn action_job(
                 }
 
                 tx.send(Event::Update(UpdateEvent::ProxyTestLatencyDone))?;
-                tx.send(Event::Update(UpdateEvent::Proxies(clash.get_proxies()?)))?;
+                tx.send(Event::Update(UpdateEvent::Proxies(
+                    clash.get_proxies_with_providers()?,
+                )))?;
             }
             Action::ApplySelection { group, proxy } => {
                 let _ = clash
                     .set_proxygroup_selected(&group, &proxy)
                     .map_err(|e| warn!("{:?}", e));
-                tx.send(Event::Update(UpdateEvent::Proxies(clash.get_proxies()?)))?;
+                tx.send(Event::Update(UpdateEvent::Proxies(
+                    clash.get_proxies_with_providers()?,
+                )))?;
             }
         }
     }

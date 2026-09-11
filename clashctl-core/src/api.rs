@@ -4,15 +4,17 @@ use std::{
     time::Duration,
 };
 
-use log::{debug, trace};
+use log::{debug, trace, warn};
 use serde::de::DeserializeOwned;
 use serde_json::{from_str, json};
 use ureq::{Agent, Request};
 use url::Url;
 
 use crate::{
-    model::{Config, Connections, Delay, Log, Proxies, Proxy, Rules, Traffic, Version},
     Error, Result,
+    model::{
+        Config, Connections, Delay, Log, Proxies, Proxy, ProxyProviders, Rules, Traffic, Version,
+    },
 };
 
 trait Convert<T: DeserializeOwned> {
@@ -233,6 +235,30 @@ impl Clash {
         self.get("proxies")
     }
 
+    /// Get Mihomo proxy-provider information.
+    pub fn get_proxy_providers(&self) -> Result<ProxyProviders> {
+        self.get("providers/proxies")
+    }
+
+    /// Get proxies, including nodes that are only exposed through
+    /// `/providers/proxies`.
+    ///
+    /// Older controllers may not implement the provider endpoint. Its failure
+    /// is non-fatal: the complete top-level `/proxies` response is returned.
+    pub fn get_proxies_with_providers(&self) -> Result<Proxies> {
+        let proxies = self.get_proxies()?;
+        match self.get_proxy_providers() {
+            Ok(proxy_providers) => Ok(proxies.merge_proxy_providers(proxy_providers)),
+            Err(error) => {
+                warn!(
+                    "Could not retrieve proxy providers; using /proxies response only: {}",
+                    error
+                );
+                Ok(proxies)
+            }
+        }
+    }
+
     /// Get rules information
     pub fn get_rules(&self) -> Result<Rules> {
         self.get("rules")
@@ -297,6 +323,47 @@ impl Clash {
         let body = format!("{{\"name\":\"{}\"}}", proxy);
         self.oneshot_req_with_body(&format!("proxies/{}", group), "PUT", Some(body))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        io::{Read as _, Write as _},
+        net::TcpListener,
+        thread,
+    };
+
+    use super::Clash;
+
+    #[test]
+    fn provider_endpoint_failure_falls_back_to_top_level_proxies() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            for (index, stream) in listener.incoming().take(2).enumerate() {
+                let mut stream = stream.unwrap();
+                let mut request = [0; 1024];
+                stream.read(&mut request).unwrap();
+                let response = if index == 0 {
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: \
+                     close\r\n\r\n{\"proxies\":{\"Group\":{\"type\":\"Selector\",\"history\":[],\"\
+                     all\":[\"provider-node\"],\"now\":\"provider-node\"}}}"
+                } else {
+                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                };
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        let clash = Clash::builder(format!("http://{}", address))
+            .unwrap()
+            .build();
+
+        let proxies = clash.get_proxies_with_providers().unwrap();
+
+        assert!(proxies.contains_key("Group"));
+        assert!(!proxies.contains_key("provider-node"));
+        server.join().unwrap();
     }
 }
 

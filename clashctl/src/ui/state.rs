@@ -1,6 +1,7 @@
 use std::{collections::HashMap, time::Instant};
 
 use clashctl_core::model::{ConnectionWithSpeed, Log, Rule, Traffic, Version};
+use crossterm::event::KeyCode;
 use smart_default::SmartDefault;
 
 use crate::{
@@ -17,6 +18,63 @@ pub(crate) type ConListState<'a> = MovableListState<'a, ConnectionWithSpeed, Noo
 pub(crate) type RuleListState<'a> = MovableListState<'a, Rule, RuleSort>;
 pub(crate) type DebugListState<'a> = MovableListState<'a, Event, Noop>;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ConnectionCloseState {
+    Idle,
+    Confirming { count: usize },
+    Closing { count: usize },
+    Result { count: usize, error: Option<String> },
+}
+
+impl Default for ConnectionCloseState {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+impl ConnectionCloseState {
+    fn request(&mut self, count: usize) {
+        *self = Self::Confirming { count };
+    }
+
+    fn start_closing(&mut self) -> bool {
+        match *self {
+            Self::Confirming { count } => {
+                *self = Self::Closing { count };
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn finish(&mut self, error: Option<String>) {
+        let count = match *self {
+            Self::Confirming { count } | Self::Closing { count } | Self::Result { count, .. } => {
+                count
+            }
+            Self::Idle => 0,
+        };
+        *self = Self::Result { count, error };
+    }
+
+    fn cancel_or_dismiss(&mut self) -> bool {
+        if matches!(self, Self::Confirming { .. } | Self::Result { .. }) {
+            *self = Self::Idle;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn blocks_input(&self) -> bool {
+        matches!(self, Self::Confirming { .. } | Self::Closing { .. })
+    }
+
+    fn is_result(&self) -> bool {
+        matches!(self, Self::Result { .. })
+    }
+}
+
 #[derive(Debug, Clone, SmartDefault)]
 pub struct TuiStates<'a> {
     pub should_quit: bool,
@@ -32,6 +90,7 @@ pub struct TuiStates<'a> {
     pub rule_freq: HashMap<String, usize>,
     // (upload_size, download_size)
     pub con_size: (u64, u64),
+    pub(crate) connection_close_state: ConnectionCloseState,
 
     #[default(_code = "{
         let mut ret = MovableListState::default();
@@ -127,6 +186,10 @@ impl<'a> TuiStates<'a> {
                 self.proxy_tree
                     .end_testing(succeeded, failed, average_delay);
             }
+            UpdateEvent::ConnectionsClosed => self.connection_close_state.finish(None),
+            UpdateEvent::ConnectionsCloseFailed(error) => {
+                self.connection_close_state.finish(Some(error));
+            }
         }
         Ok(None)
     }
@@ -148,19 +211,54 @@ impl<'a> TuiStates<'a> {
                 }
             }
             InputEvent::Esc => {
-                if let Some(mut list) = self.active_list() {
-                    list.end();
+                if self.connection_close_state.cancel_or_dismiss() {
+                    return Ok(None);
+                }
+                if !self.connection_close_state.blocks_input() {
+                    if let Some(mut list) = self.active_list() {
+                        list.end();
+                    }
                 }
             }
             InputEvent::ToggleHold => {
-                if let Some(mut list) = self.active_list() {
-                    list.toggle();
+                if self.connection_close_state.is_result() {
+                    self.connection_close_state.cancel_or_dismiss();
+                    return Ok(None);
+                }
+                if !self.connection_close_state.blocks_input() {
+                    if let Some(mut list) = self.active_list() {
+                        list.toggle();
+                    }
                 }
             }
             InputEvent::List(list_event) => {
-                if let Some(mut list) = self.active_list() {
-                    return Ok(list.handle(list_event));
+                if self.connection_close_state.is_result()
+                    && matches!(list_event.code, KeyCode::Enter)
+                {
+                    self.connection_close_state.cancel_or_dismiss();
+                    return Ok(None);
                 }
+                if !self.connection_close_state.blocks_input() {
+                    if let Some(mut list) = self.active_list() {
+                        return Ok(list.handle(list_event));
+                    }
+                }
+            }
+            InputEvent::RequestCloseConnections => {
+                if self.title() == "Conns"
+                    && matches!(self.connection_close_state, ConnectionCloseState::Idle)
+                    && !self.con_state.is_empty()
+                {
+                    self.connection_close_state.request(self.con_state.len());
+                }
+            }
+            InputEvent::ConfirmCloseConnections => {
+                if self.connection_close_state.start_closing() {
+                    return Ok(Some(Action::CloseConnections));
+                }
+            }
+            InputEvent::CancelCloseConnections => {
+                self.connection_close_state.cancel_or_dismiss();
             }
             InputEvent::TestLatency => {
                 if self.title() == "Proxies" && !self.proxy_tree.is_testing() {
@@ -192,5 +290,37 @@ impl<'a> TuiStates<'a> {
 
     fn drop_events(&mut self, num: usize) -> impl Iterator<Item = Event> + '_ {
         self.debug_state.drain(..num)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connection_close_state_requires_confirmation_and_preserves_result() {
+        let mut state = ConnectionCloseState::default();
+
+        assert!(!state.start_closing());
+        state.request(3);
+        assert!(matches!(
+            state,
+            ConnectionCloseState::Confirming { count: 3 }
+        ));
+
+        assert!(state.start_closing());
+        assert!(matches!(state, ConnectionCloseState::Closing { count: 3 }));
+
+        state.finish(None);
+        assert!(matches!(
+            state,
+            ConnectionCloseState::Result {
+                count: 3,
+                error: None
+            }
+        ));
+
+        assert!(state.cancel_or_dismiss());
+        assert!(matches!(state, ConnectionCloseState::Idle));
     }
 }

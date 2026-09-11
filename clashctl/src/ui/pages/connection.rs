@@ -1,23 +1,97 @@
 use bytesize::ByteSize;
 use chrono::Utc;
 use tui::{
+    buffer::Buffer,
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Span, Spans},
-    widgets::Widget,
+    widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
 };
 
 use crate::{
-    components::{MovableList, MovableListItem},
+    HMS,
+    components::{FooterItem, MovableList, MovableListItem},
     define_widget,
     interactive::clashctl::model::ConnectionWithSpeed,
-    HMS,
+    ui::state::ConnectionCloseState,
 };
 
 define_widget!(ConnectionPage);
 
 impl<'a> Widget for ConnectionPage<'a> {
-    fn render(self, area: tui::layout::Rect, buf: &mut tui::buffer::Buffer) {
-        MovableList::new("Connections", &self.state.con_state).render(area, buf);
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        MovableList::new("Connections", &self.state.con_state)
+            .footer_hint(FooterItem::span(Span::styled(
+                " [K] Close all ",
+                Style::default().fg(Color::LightRed),
+            )))
+            .render(area, buf);
+
+        if !matches!(
+            self.state.connection_close_state,
+            ConnectionCloseState::Idle
+        ) {
+            self.render_connection_close_dialog(area, buf);
+        }
+    }
+}
+
+impl<'a> ConnectionPage<'a> {
+    fn render_connection_close_dialog(&self, area: Rect, buf: &mut Buffer) {
+        let dialog = centered_rect(area, 60, 7);
+        let (title, content, color) = match &self.state.connection_close_state {
+            ConnectionCloseState::Confirming { count } => (
+                " Close all connections? ",
+                format!(
+                    "Close all {count} active connections?\n\n[Y] Confirm    [N] / [Esc] Cancel"
+                ),
+                Color::Yellow,
+            ),
+            ConnectionCloseState::Closing { count } => (
+                " Closing connections ",
+                format!("Closing all {count} active connections..."),
+                Color::LightBlue,
+            ),
+            ConnectionCloseState::Result { count, error: None } => (
+                " Connections closed ",
+                format!("Closed {count} connections.\n\n[Enter] [Space] [Esc] Dismiss"),
+                Color::Green,
+            ),
+            ConnectionCloseState::Result {
+                count,
+                error: Some(error),
+            } => (
+                " Could not close connections ",
+                format!(
+                    "Could not close {count} connections:\n{error}\n\n[Enter] [Space] [Esc] \
+                     Dismiss"
+                ),
+                Color::Red,
+            ),
+            ConnectionCloseState::Idle => return,
+        };
+
+        Clear.render(dialog, buf);
+        Paragraph::new(content)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(Span::styled(title, Style::default().fg(color)))
+                    .style(Style::default().fg(color)),
+            )
+            .wrap(Wrap { trim: true })
+            .render(dialog, buf);
+    }
+}
+
+fn centered_rect(area: Rect, width_percent: u16, height: u16) -> Rect {
+    let width = area.width.saturating_mul(width_percent).saturating_div(100);
+    let height = height.min(area.height);
+    Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
     }
 }
 

@@ -31,6 +31,7 @@ pub struct ProxyTree<'a> {
     pub(super) expanded: bool,
     pub(super) cursor: usize,
     pub(super) testing: bool,
+    last_test: Option<LatencyTestSummary>,
     pub(super) footer: Footer<'a>,
     sort_method: ProxySort,
 }
@@ -43,6 +44,7 @@ impl<'a> Default for ProxyTree<'a> {
             cursor: Default::default(),
             footer: Default::default(),
             testing: Default::default(),
+            last_test: Default::default(),
             sort_method: Default::default(),
         };
         ret.update_footer();
@@ -66,15 +68,51 @@ impl<'a> ProxyTree<'a> {
         self.testing
     }
 
-    #[inline]
-    pub fn start_testing(&mut self) -> &mut Self {
-        self.testing = true;
-        self.update_footer()
+    /// Return the proxies targeted by a manual latency test.
+    ///
+    /// When a group is expanded, test only the highlighted node. Otherwise,
+    /// test every regular proxy in the focused group.
+    pub fn manual_latency_test_targets(&self) -> Vec<String> {
+        let Some(group) = self.groups.get(self.cursor) else {
+            return vec![];
+        };
+
+        if self.expanded {
+            return group
+                .members
+                .get(group.cursor)
+                .filter(|proxy| proxy.proxy_type.is_normal())
+                .map(|proxy| vec![proxy.name.clone()])
+                .unwrap_or_default();
+        }
+
+        group
+            .members
+            .iter()
+            .filter(|proxy| proxy.proxy_type.is_normal())
+            .map(|proxy| proxy.name.clone())
+            .collect()
     }
 
     #[inline]
-    pub fn end_testing(&mut self) -> &mut Self {
+    pub fn start_testing(&mut self) -> &mut Self {
+        self.testing = true;
+        self.last_test = None;
+        self.update_footer()
+    }
+
+    pub fn end_testing(
+        &mut self,
+        succeeded: usize,
+        failed: usize,
+        average_delay: Option<u64>,
+    ) -> &mut Self {
         self.testing = false;
+        self.last_test = Some(LatencyTestSummary {
+            succeeded,
+            failed,
+            average_delay,
+        });
         self.update_footer()
     }
 
@@ -111,8 +149,9 @@ impl<'a> ProxyTree<'a> {
                 if self.testing {
                     FooterItem::span(Span::styled(" Testing ", highlight.fg(Color::Green)))
                 } else {
-                    FooterItem::spans(help_footer("Test", style, highlight)).wrapped()
+                    FooterItem::spans(help_footer("Test group", style, highlight)).wrapped()
                 },
+                self.test_result_footer_item(),
                 FooterItem::spans(sort),
             ];
 
@@ -142,8 +181,10 @@ impl<'a> ProxyTree<'a> {
             footer.push_left(if self.testing {
                 FooterItem::span(Span::styled(" Testing ", highlight.fg(Color::Blue)))
             } else {
-                FooterItem::spans(help_footer("Test", style, highlight)).wrapped()
+                FooterItem::spans(help_footer("Test node", style, highlight)).wrapped()
             });
+
+            footer.push_left(self.test_result_footer_item());
 
             footer.push_left(tagged_footer("Sort", style, self.sort_method).into());
 
@@ -153,6 +194,26 @@ impl<'a> ProxyTree<'a> {
         }
         self.footer = footer;
         self
+    }
+
+    fn test_result_footer_item(&self) -> FooterItem<'static> {
+        let Some(result) = self.last_test.as_ref() else {
+            return FooterItem::raw(String::new());
+        };
+
+        let text = match result.average_delay {
+            Some(delay) => format!(
+                " ✓ {} ok · {} failed · avg {} ms ",
+                result.succeeded, result.failed, delay
+            ),
+            None => format!(" ✓ {} ok · {} failed ", result.succeeded, result.failed),
+        };
+        let color = if result.failed == 0 {
+            Color::Green
+        } else {
+            Color::Yellow
+        };
+        FooterItem::span(Span::styled(text, Style::default().fg(color)))
     }
 
     pub fn replace_with(&mut self, mut new_tree: ProxyTree<'a>) -> &mut Self {
@@ -179,11 +240,22 @@ impl<'a> ProxyTree<'a> {
                     .unwrap_or_default()
             }
         }
+        new_tree.testing = self.testing;
+        new_tree.last_test = self.last_test.clone();
         self.groups = new_tree.groups;
+        self.testing = new_tree.testing;
+        self.last_test = new_tree.last_test;
         let method = self.sort_method;
         self.sort_with(&method);
         self.update_footer()
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LatencyTestSummary {
+    succeeded: usize,
+    failed: usize,
+    average_delay: Option<u64>,
 }
 
 impl<'a> From<Proxies> for ProxyTree<'a> {
@@ -325,6 +397,81 @@ mod tests {
             action,
             Some(Action::ApplySelection { group, proxy }) if group == "Group" && proxy == "two"
         ));
+    }
+
+    #[test]
+    fn manual_latency_test_targets_follow_the_current_focus() {
+        let mut tree = ProxyTree::from(proxies(vec![
+            (
+                "Group",
+                proxy(
+                    ProxyType::Selector,
+                    Some(vec!["one", "builtin", "two"]),
+                    Some("one"),
+                ),
+            ),
+            ("one", proxy(ProxyType::Shadowsocks, None, None)),
+            ("builtin", proxy(ProxyType::Direct, None, None)),
+            ("two", proxy(ProxyType::Trojan, None, None)),
+        ]));
+
+        assert_eq!(
+            tree.manual_latency_test_targets(),
+            vec!["one".to_owned(), "two".to_owned()]
+        );
+
+        tree.hold();
+        tree.handle(ListEvent {
+            fast: false,
+            code: KeyCode::Down,
+        });
+        assert!(tree.manual_latency_test_targets().is_empty());
+
+        tree.handle(ListEvent {
+            fast: false,
+            code: KeyCode::Down,
+        });
+        assert_eq!(tree.manual_latency_test_targets(), vec!["two".to_owned()]);
+    }
+
+    #[test]
+    fn latency_test_result_is_visible_and_survives_proxy_refreshes() {
+        let proxy_data = proxies(vec![
+            (
+                "Group",
+                proxy(ProxyType::Selector, Some(vec!["one"]), Some("one")),
+            ),
+            ("one", proxy(ProxyType::Vless, None, None)),
+        ]);
+        let mut tree = ProxyTree::from(proxy_data.clone());
+
+        tree.end_testing(1, 1, Some(42));
+        let footer_text = tree
+            .footer
+            .items()
+            .flat_map(|item| item.to_spans().0)
+            .map(|span| span.content.to_string())
+            .collect::<String>();
+        assert!(footer_text.contains("1 ok · 1 failed · avg 42 ms"));
+
+        tree.replace_with(ProxyTree::from(proxy_data));
+        let refreshed_footer_text = tree
+            .footer
+            .items()
+            .flat_map(|item| item.to_spans().0)
+            .map(|span| span.content.to_string())
+            .collect::<String>();
+        assert!(refreshed_footer_text.contains("1 ok · 1 failed · avg 42 ms"));
+
+        tree.start_testing();
+        let testing_footer_text = tree
+            .footer
+            .items()
+            .flat_map(|item| item.to_spans().0)
+            .map(|span| span.content.to_string())
+            .collect::<String>();
+        assert!(testing_footer_text.contains("Testing"));
+        assert!(!testing_footer_text.contains("avg 42 ms"));
     }
 
     #[test]

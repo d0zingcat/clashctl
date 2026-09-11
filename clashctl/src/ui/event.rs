@@ -79,6 +79,9 @@ pub enum InputEvent {
     ToggleHold,
     List(ListEvent),
     TestLatency,
+    RequestCloseConnections,
+    ConfirmCloseConnections,
+    CancelCloseConnections,
     NextSort,
     PrevSort,
     Other(KE),
@@ -105,6 +108,8 @@ pub enum UpdateEvent {
         failed: usize,
         average_delay: Option<u64>,
     },
+    ConnectionsClosed,
+    ConnectionsCloseFailed(String),
 }
 
 impl Display for UpdateEvent {
@@ -130,6 +135,10 @@ impl Display for UpdateEvent {
                     .map(|delay| format!(", average {} ms", delay))
                     .unwrap_or_default()
             ),
+            UpdateEvent::ConnectionsClosed => write!(f, "All connections closed"),
+            UpdateEvent::ConnectionsCloseFailed(error) => {
+                write!(f, "Could not close connections: {}", error)
+            }
         }
     }
 }
@@ -147,6 +156,9 @@ impl TryFrom<KC> for Event {
         match value {
             KC::Char('q') | KC::Char('x') => Ok(Event::Quit),
             KC::Char('t') | KC::Char('T') => Ok(Event::Input(InputEvent::TestLatency)),
+            KC::Char('k') | KC::Char('K') => Ok(Event::Input(InputEvent::RequestCloseConnections)),
+            KC::Char('y') | KC::Char('Y') => Ok(Event::Input(InputEvent::ConfirmCloseConnections)),
+            KC::Char('n') | KC::Char('N') => Ok(Event::Input(InputEvent::CancelCloseConnections)),
             KC::Esc => Ok(Event::Input(InputEvent::Esc)),
             KC::Char(' ') => Ok(Event::Input(InputEvent::ToggleHold)),
             KC::Char(char) if char.is_ascii_digit() => Ok(Event::Input(InputEvent::TabGoto(
@@ -190,6 +202,23 @@ mod tests {
             assert!(matches!(
                 Event::try_from(KC::Char(key)).unwrap(),
                 Event::Input(InputEvent::TestLatency)
+            ));
+        }
+    }
+
+    #[test]
+    fn connection_close_shortcuts_support_both_cases() {
+        for (key, expected) in [
+            ('k', InputEvent::RequestCloseConnections),
+            ('K', InputEvent::RequestCloseConnections),
+            ('y', InputEvent::ConfirmCloseConnections),
+            ('Y', InputEvent::ConfirmCloseConnections),
+            ('n', InputEvent::CancelCloseConnections),
+            ('N', InputEvent::CancelCloseConnections),
+        ] {
+            assert!(matches!(
+                Event::try_from(KC::Char(key)).unwrap(),
+                Event::Input(event) if event == expected
             ));
         }
     }

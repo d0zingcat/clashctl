@@ -27,6 +27,7 @@ where
 {
     pub(super) title: String,
     pub(super) state: &'a MovableListState<'a, T, S>,
+    footer_hint: Option<FooterItem<'a>>,
 }
 
 impl<'a, T, S> MovableList<'a, T, S>
@@ -39,7 +40,13 @@ where
         Self {
             state,
             title: title.into(),
+            footer_hint: None,
         }
+    }
+
+    pub fn footer_hint(mut self, hint: FooterItem<'a>) -> Self {
+        self.footer_hint = Some(hint);
+        self
     }
 
     fn render_footer(&self, area: tui::layout::Rect, buf: &mut tui::buffer::Buffer) {
@@ -78,6 +85,10 @@ where
             if !sort_str.is_empty() {
                 footer.push_left(tagged_footer("Sort", style, sort_str).into());
             }
+        }
+
+        if let Some(hint) = self.footer_hint.clone() {
+            footer.push_left(hint);
         }
 
         let widget = FooterWidget::new(&footer);

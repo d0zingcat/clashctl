@@ -176,6 +176,24 @@ fn action_job(
                     clash.get_proxies_with_providers()?,
                 )))?;
             }
+            Action::CloseConnections => match clash.close_connections() {
+                Ok(()) => {
+                    tx.send(Event::Update(UpdateEvent::ConnectionsClosed))?;
+                    match clash.get_connections() {
+                        Ok(connections) => {
+                            tx.send(Event::Update(UpdateEvent::Connection(connections.into())))?;
+                        }
+                        Err(error) => {
+                            warn!("Could not refresh connections after closing them: {error}")
+                        }
+                    }
+                }
+                Err(error) => {
+                    tx.send(Event::Update(UpdateEvent::ConnectionsCloseFailed(
+                        error.to_string(),
+                    )))?;
+                }
+            },
         }
     }
     Ok(())

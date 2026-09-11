@@ -365,6 +365,33 @@ mod tests {
         assert!(!proxies.contains_key("provider-node"));
         server.join().unwrap();
     }
+
+    #[test]
+    fn close_connections_uses_delete_connections_endpoint() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let mut stream = listener.incoming().next().unwrap().unwrap();
+            let mut request = [0; 1024];
+            let size = stream.read(&mut request).unwrap();
+            assert!(
+                std::str::from_utf8(&request[..size])
+                    .unwrap()
+                    .starts_with("DELETE /connections HTTP/1.1")
+            );
+            stream
+                .write_all(
+                    b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+        });
+        let clash = Clash::builder(format!("http://{}", address))
+            .unwrap()
+            .build();
+
+        clash.close_connections().unwrap();
+        server.join().unwrap();
+    }
 }
 
 pub struct LongHaul<T: DeserializeOwned> {
